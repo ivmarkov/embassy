@@ -234,3 +234,365 @@ impl Drop for UdpSocket<'_> {
         self.stack.borrow_mut().sockets.remove(self.handle);
     }
 }
+
+/// UDP stack compatible with `embedded-nal-async` traits.
+pub mod nal {
+    use core::cell::{Cell, UnsafeCell};
+    use core::mem::MaybeUninit;
+    use core::ptr::NonNull;
+
+    use embedded_io_async::ErrorKind;
+    use embedded_nal_async::{
+        ConnectedUdp, ConnectedUdpReceive, ConnectedUdpSend, ConnectedUdpSplit, IpAddr, SocketAddr, SocketAddrV4,
+        SocketAddrV6, UdpStack, UnconnectedUdp, UnconnectedUdpReceive, UnconnectedUdpSend, UnconnectedUdpSplit,
+    };
+    use smoltcp::wire::IpAddress;
+
+    use super::*;
+
+    /// TODO: Doc
+    #[derive(Debug)]
+    pub enum Error {
+        /// TODO: Doc
+        Bind(BindError),
+        /// TODO: Doc
+        Send(SendError),
+        /// TODO: Doc
+        Recv(RecvError),
+    }
+
+    impl From<BindError> for Error {
+        fn from(e: BindError) -> Self {
+            Self::Bind(e)
+        }
+    }
+
+    impl From<SendError> for Error {
+        fn from(e: SendError) -> Self {
+            Self::Send(e)
+        }
+    }
+
+    impl From<RecvError> for Error {
+        fn from(e: RecvError) -> Self {
+            Self::Recv(e)
+        }
+    }
+
+    impl embedded_io_async::Error for Error {
+        fn kind(&self) -> ErrorKind {
+            ErrorKind::Other // TODO
+        }
+    }
+
+    /// UDP stack connection pool compatible with `embedded-nal-async` traits.
+    ///
+    /// The pool is capable of managing up to N concurrent connections with tx and rx buffers according to TX_SZ and RX_SZ.
+    pub struct UdpNalStack<'d, D: Driver, const N: usize, const TX_SZ: usize = 1024, const RX_SZ: usize = 1024> {
+        stack: &'d Stack<D>,
+        state: &'d UdpNalStackState<N, TX_SZ, RX_SZ>,
+    }
+
+    impl<'d, D: Driver, const N: usize, const TX_SZ: usize, const RX_SZ: usize> UdpNalStack<'d, D, N, TX_SZ, RX_SZ> {
+        /// Create a new `UdpNalStack`.
+        pub fn new(stack: &'d Stack<D>, state: &'d UdpNalStackState<N, TX_SZ, RX_SZ>) -> Self {
+            Self { stack, state }
+        }
+    }
+
+    impl<'d, D: Driver, const N: usize, const TX_SZ: usize, const RX_SZ: usize> UdpStack
+        for UdpNalStack<'d, D, N, TX_SZ, RX_SZ>
+    {
+        type Error = Error;
+
+        type Connected<'a> = UdpSocket2<'a, N, TX_SZ, RX_SZ> where Self: 'a;
+
+        type UniquelyBound<'a> = UdpSocket2<'a, N, TX_SZ, RX_SZ> where Self: 'a;
+
+        type MultiplyBound<'a> = UdpSocket2<'a, N, TX_SZ, RX_SZ> where Self: 'a;
+
+        async fn connect_from(
+            &self,
+            local: SocketAddr,
+            remote: SocketAddr,
+        ) -> Result<(SocketAddr, Self::Connected<'_>), Self::Error> {
+            let mut socket = UdpSocket2::new(self.stack, Some(to_endpoint(&remote)), self.state)?;
+
+            socket.socket.bind(to_endpoint(&local))?;
+
+            Ok((local, socket)) // TODO
+        }
+
+        async fn bind_single(&self, local: SocketAddr) -> Result<(SocketAddr, Self::UniquelyBound<'_>), Self::Error> {
+            let mut socket = UdpSocket2::new(self.stack, None, self.state)?;
+
+            socket.socket.bind(to_endpoint(&local))?;
+
+            Ok((local, socket)) // TODO
+        }
+
+        async fn bind_multiple(&self, local: SocketAddr) -> Result<Self::MultiplyBound<'_>, Self::Error> {
+            let mut socket = UdpSocket2::new(self.stack, None, self.state)?;
+
+            socket.socket.bind(to_endpoint(&local))?;
+
+            Ok(socket) // TODO
+        }
+    }
+
+    /// Opened UDP socket in a [`UdpNalStack`].
+    pub struct UdpSocket2<'d, const N: usize, const TX_SZ: usize, const RX_SZ: usize> {
+        socket: UdpSocket<'d>,
+        remote: Option<IpEndpoint>,
+        state: &'d UdpNalStackState<N, TX_SZ, RX_SZ>,
+        bufs: NonNull<([u8; TX_SZ], [u8; RX_SZ], [PacketMetadata; 16], [PacketMetadata; 16])>,
+    }
+
+    impl<'d, const N: usize, const TX_SZ: usize, const RX_SZ: usize> UdpSocket2<'d, N, TX_SZ, RX_SZ> {
+        fn new<D: Driver>(
+            stack: &'d Stack<D>,
+            remote: Option<IpEndpoint>,
+            state: &'d UdpNalStackState<N, TX_SZ, RX_SZ>,
+        ) -> Result<Self, Error> {
+            let mut bufs = state.pool.alloc().ok_or(BindError::InvalidState)?; // TODO
+            Ok(Self {
+                socket: unsafe {
+                    UdpSocket::new(
+                        stack,
+                        &mut bufs.as_mut().3,
+                        &mut bufs.as_mut().1,
+                        &mut bufs.as_mut().2,
+                        &mut bufs.as_mut().0,
+                    )
+                },
+                remote,
+                state,
+                bufs,
+            })
+        }
+    }
+
+    impl<'d, const N: usize, const TX_SZ: usize, const RX_SZ: usize> Drop for UdpSocket2<'d, N, TX_SZ, RX_SZ> {
+        fn drop(&mut self) {
+            unsafe {
+                self.socket.close();
+                self.state.pool.free(self.bufs);
+            }
+        }
+    }
+
+    impl<'d, const N: usize, const TX_SZ: usize, const RX_SZ: usize> embedded_io_async::ErrorType
+        for UdpSocket2<'d, N, TX_SZ, RX_SZ>
+    {
+        type Error = Error;
+    }
+
+    impl<'d, const N: usize, const TX_SZ: usize, const RX_SZ: usize> embedded_io_async::ErrorType
+        for &UdpSocket2<'d, N, TX_SZ, RX_SZ>
+    {
+        type Error = Error;
+    }
+
+    impl<'d, const N: usize, const TX_SZ: usize, const RX_SZ: usize> ConnectedUdpReceive
+        for UdpSocket2<'d, N, TX_SZ, RX_SZ>
+    {
+        async fn receive_into(&mut self, buffer: &mut [u8]) -> Result<usize, Self::Error> {
+            loop {
+                let (len, remote) = UdpSocket::recv_from(&self.socket, buffer).await?;
+                if self.remote.unwrap() == remote {
+                    break Ok(len);
+                }
+            }
+        }
+    }
+
+    impl<'d, const N: usize, const TX_SZ: usize, const RX_SZ: usize> ConnectedUdpReceive
+        for &UdpSocket2<'d, N, TX_SZ, RX_SZ>
+    {
+        async fn receive_into(&mut self, buffer: &mut [u8]) -> Result<usize, Self::Error> {
+            // TODO: Avoid duplication
+            loop {
+                let (len, remote) = UdpSocket::recv_from(&self.socket, buffer).await?;
+                if self.remote.unwrap() == remote {
+                    break Ok(len);
+                }
+            }
+        }
+    }
+
+    impl<'d, const N: usize, const TX_SZ: usize, const RX_SZ: usize> ConnectedUdpSend for UdpSocket2<'d, N, TX_SZ, RX_SZ> {
+        async fn send(&mut self, data: &[u8]) -> Result<(), Self::Error> {
+            Ok(UdpSocket::send_to(&self.socket, data, self.remote.unwrap()).await?)
+        }
+    }
+
+    impl<'d, const N: usize, const TX_SZ: usize, const RX_SZ: usize> ConnectedUdpSend for &UdpSocket2<'d, N, TX_SZ, RX_SZ> {
+        async fn send(&mut self, data: &[u8]) -> Result<(), Self::Error> {
+            // TODO: Avoid duplication
+            Ok(UdpSocket::send_to(&self.socket, data, self.remote.unwrap()).await?)
+        }
+    }
+
+    impl<'d, const N: usize, const TX_SZ: usize, const RX_SZ: usize> ConnectedUdp for UdpSocket2<'d, N, TX_SZ, RX_SZ> {}
+
+    impl<'d, const N: usize, const TX_SZ: usize, const RX_SZ: usize> ConnectedUdpSplit for UdpSocket2<'d, N, TX_SZ, RX_SZ> {
+        type ConnectedReceive<'a> = &'a UdpSocket2<'d, N, TX_SZ, RX_SZ> where Self: 'a;
+
+        type ConnectedSend<'a> = &'a UdpSocket2<'d, N, TX_SZ, RX_SZ> where Self: 'a;
+
+        async fn split(&mut self) -> Result<(Self::ConnectedReceive<'_>, Self::ConnectedSend<'_>), Self::Error> {
+            Ok((&*self, &*self))
+        }
+    }
+
+    impl<'d, const N: usize, const TX_SZ: usize, const RX_SZ: usize> UnconnectedUdpReceive
+        for UdpSocket2<'d, N, TX_SZ, RX_SZ>
+    {
+        async fn receive_into(&mut self, buffer: &mut [u8]) -> Result<(usize, SocketAddr, SocketAddr), Self::Error> {
+            let (len, remote) = UdpSocket::recv_from(&self.socket, buffer).await?;
+
+            let local = IpEndpoint {
+                addr: self.socket.endpoint().addr.unwrap(), // TODO
+                port: self.socket.endpoint().port,
+            };
+
+            Ok((len, to_nal_addr(&local), to_nal_addr(&remote)))
+        }
+    }
+
+    impl<'d, const N: usize, const TX_SZ: usize, const RX_SZ: usize> UnconnectedUdpReceive
+        for &UdpSocket2<'d, N, TX_SZ, RX_SZ>
+    {
+        async fn receive_into(&mut self, buffer: &mut [u8]) -> Result<(usize, SocketAddr, SocketAddr), Self::Error> {
+            // TODO: Avoid duplication
+            let (len, remote) = UdpSocket::recv_from(&self.socket, buffer).await?;
+
+            let local = IpEndpoint {
+                addr: self.socket.endpoint().addr.unwrap(), // TODO
+                port: self.socket.endpoint().port,
+            };
+
+            Ok((len, to_nal_addr(&local), to_nal_addr(&remote)))
+        }
+    }
+
+    impl<'d, const N: usize, const TX_SZ: usize, const RX_SZ: usize> UnconnectedUdpSend
+        for UdpSocket2<'d, N, TX_SZ, RX_SZ>
+    {
+        async fn send(
+            &mut self,
+            _local: SocketAddr, // TODO
+            remote: SocketAddr,
+            data: &[u8],
+        ) -> Result<(), Self::Error> {
+            let remote = to_endpoint(&remote);
+            Ok(UdpSocket::send_to(&self.socket, data, remote).await?)
+        }
+    }
+
+    impl<'d, const N: usize, const TX_SZ: usize, const RX_SZ: usize> UnconnectedUdpSend
+        for &UdpSocket2<'d, N, TX_SZ, RX_SZ>
+    {
+        async fn send(
+            &mut self,
+            _local: SocketAddr, // TODO
+            remote: SocketAddr,
+            data: &[u8],
+        ) -> Result<(), Self::Error> {
+            // TODO: Avoid duplication
+            let remote = to_endpoint(&remote);
+            Ok(UdpSocket::send_to(&self.socket, data, remote).await?)
+        }
+    }
+
+    impl<'d, const N: usize, const TX_SZ: usize, const RX_SZ: usize> UnconnectedUdp for UdpSocket2<'d, N, TX_SZ, RX_SZ> {}
+
+    impl<'d, const N: usize, const TX_SZ: usize, const RX_SZ: usize> UnconnectedUdpSplit
+        for UdpSocket2<'d, N, TX_SZ, RX_SZ>
+    {
+        type UnconnectedReceive<'a> = &'a UdpSocket2<'d, N, TX_SZ, RX_SZ> where Self: 'a;
+
+        type UnconnectedSend<'a> = &'a UdpSocket2<'d, N, TX_SZ, RX_SZ> where Self: 'a;
+
+        async fn split(&mut self) -> Result<(Self::UnconnectedReceive<'_>, Self::UnconnectedSend<'_>), Self::Error> {
+            Ok((&*self, &*self))
+        }
+    }
+
+    /// State for UdpNalStack
+    pub struct UdpNalStackState<const N: usize, const TX_SZ: usize, const RX_SZ: usize> {
+        pool: Pool<([u8; TX_SZ], [u8; RX_SZ], [PacketMetadata; 16], [PacketMetadata; 16]), N>,
+    }
+
+    impl<const N: usize, const TX_SZ: usize, const RX_SZ: usize> UdpNalStackState<N, TX_SZ, RX_SZ> {
+        /// Create a new `UdpNalStackState`.
+        pub const fn new() -> Self {
+            Self { pool: Pool::new() }
+        }
+    }
+
+    struct Pool<T, const N: usize> {
+        used: [Cell<bool>; N],
+        data: [UnsafeCell<MaybeUninit<T>>; N],
+    }
+
+    impl<T, const N: usize> Pool<T, N> {
+        const VALUE: Cell<bool> = Cell::new(false);
+        const UNINIT: UnsafeCell<MaybeUninit<T>> = UnsafeCell::new(MaybeUninit::uninit());
+
+        const fn new() -> Self {
+            Self {
+                used: [Self::VALUE; N],
+                data: [Self::UNINIT; N],
+            }
+        }
+    }
+
+    impl<T, const N: usize> Pool<T, N> {
+        fn alloc(&self) -> Option<NonNull<T>> {
+            for n in 0..N {
+                // this can't race because Pool is not Sync.
+                if !self.used[n].get() {
+                    self.used[n].set(true);
+                    let p = self.data[n].get() as *mut T;
+                    return Some(unsafe { NonNull::new_unchecked(p) });
+                }
+            }
+            None
+        }
+
+        /// safety: p must be a pointer obtained from self.alloc that hasn't been freed yet.
+        unsafe fn free(&self, p: NonNull<T>) {
+            let origin = self.data.as_ptr() as *mut T;
+            let n = p.as_ptr().offset_from(origin);
+            assert!(n >= 0);
+            assert!((n as usize) < N);
+            self.used[n as usize].set(false);
+        }
+    }
+
+    fn to_endpoint(addr: &SocketAddr) -> IpEndpoint {
+        IpEndpoint {
+            addr: match addr.ip() {
+                #[cfg(feature = "proto-ipv4")]
+                IpAddr::V4(addr) => crate::IpAddress::Ipv4(crate::Ipv4Address::from_bytes(&addr.octets())),
+                #[cfg(not(feature = "proto-ipv4"))]
+                IpAddr::V4(_) => panic!("ipv4 support not enabled"),
+                #[cfg(feature = "proto-ipv6")]
+                IpAddr::V6(addr) => crate::IpAddress::Ipv6(crate::Ipv6Address::from_bytes(&addr.octets())),
+                #[cfg(not(feature = "proto-ipv6"))]
+                IpAddr::V6(_) => panic!("ipv6 support not enabled"),
+            },
+            port: addr.port(),
+        }
+    }
+
+    fn to_nal_addr(endpoint: &IpEndpoint) -> SocketAddr {
+        match endpoint.addr {
+            #[cfg(feature = "proto-ipv4")]
+            IpAddress::Ipv4(addr) => SocketAddr::V4(SocketAddrV4::new(addr.0.into(), endpoint.port)),
+            #[cfg(feature = "proto-ipv6")]
+            IpAddress::Ipv6(addr) => SocketAddr::V6(SocketAddrV6::new(addr.0.into(), endpoint.port, 0, 0)), // TODO
+        }
+    }
+}

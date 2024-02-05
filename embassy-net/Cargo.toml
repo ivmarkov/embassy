@@ -19,11 +19,14 @@ src_base_git = "https://github.com/embassy-rs/embassy/blob/$COMMIT/embassy-net/s
 features = ["defmt", "tcp", "udp", "dns", "dhcpv4", "proto-ipv6", "medium-ethernet", "medium-ip", "medium-ieee802154", "igmp"]
 target = "thumbv7em-none-eabi"
 
+[patch.crates-io]
+embedded-nal-async = { path = "../../embedded-nal/embedded-nal-async" }
+
 [package.metadata.docs.rs]
 features = ["defmt", "tcp", "udp", "dns", "dhcpv4", "proto-ipv6", "medium-ethernet", "medium-ip", "medium-ieee802154", "igmp"]
 
 [features]
-default = []
+default = ["proto-ipv4", "proto-ipv6", "udp", "tcp", "dns", "medium-ethernet"]
 std = []
 
 ## Enable defmt
