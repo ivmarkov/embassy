@@ -327,7 +327,7 @@ pub mod nal {
                     .borrow_mut()
                     .iface
                     .get_source_address(&remote.addr)
-                    .unwrap(); // TODO
+                    .ok_or(BindError::NoRoute)?;
             }
 
             let mut socket = UdpSocket2::new(self.stack, Some(remote), self.state)?;
@@ -347,7 +347,7 @@ pub mod nal {
                     .borrow_mut()
                     .iface
                     .get_source_address(&local.addr)
-                    .unwrap(); // TODO
+                    .ok_or(BindError::NoRoute)?;
             }
 
             let mut socket = UdpSocket2::new(self.stack, None, self.state)?;
@@ -358,7 +358,7 @@ pub mod nal {
         }
 
         async fn bind_multiple(&self, _local: SocketAddr) -> Result<Self::MultiplyBound<'_>, Self::Error> {
-            todo!("Not really possible. Or at least not easily possible.");
+            todo!("Waiting for https://github.com/smoltcp-rs/smoltcp/pull/904 to land.");
         }
     }
 
@@ -376,7 +376,7 @@ pub mod nal {
             remote: Option<IpEndpoint>,
             state: &'d UdpNalStackState<N, TX_SZ, RX_SZ>,
         ) -> Result<Self, Error> {
-            let mut bufs = state.pool.alloc().ok_or(BindError::InvalidState)?; // TODO
+            let mut bufs = state.pool.alloc().ok_or(BindError::InvalidState)?;
             Ok(Self {
                 socket: unsafe {
                     UdpSocket::new(
@@ -473,7 +473,7 @@ pub mod nal {
             let (len, remote) = UdpSocket::recv_from(&self.socket, buffer).await?;
 
             let local = IpEndpoint {
-                addr: self.socket.endpoint().addr.unwrap(), // TODO
+                addr: self.socket.endpoint().addr.unwrap(), // TODO: Waiting for https://github.com/smoltcp-rs/smoltcp/pull/904
                 port: self.socket.endpoint().port,
             };
 
@@ -486,7 +486,7 @@ pub mod nal {
     {
         async fn send(
             &mut self,
-            _local: SocketAddr, // TODO
+            _local: SocketAddr, // TODO: Waiting for https://github.com/smoltcp-rs/smoltcp/pull/904
             remote: SocketAddr,
             data: &[u8],
         ) -> Result<(), Self::Error> {
@@ -499,7 +499,7 @@ pub mod nal {
     {
         async fn send(
             &mut self,
-            _local: SocketAddr, // TODO
+            _local: SocketAddr, // TODO: Waiting for https://github.com/smoltcp-rs/smoltcp/pull/904
             remote: SocketAddr,
             data: &[u8],
         ) -> Result<(), Self::Error> {
@@ -592,8 +592,10 @@ pub mod nal {
         match endpoint.addr {
             #[cfg(feature = "proto-ipv4")]
             IpAddress::Ipv4(addr) => SocketAddr::V4(SocketAddrV4::new(addr.0.into(), endpoint.port)),
+            // TODO: Needs `Address::Scope` to become public but then, it is still derived from the IP address - at least for some scopes?
+            // TODO: Not sure what to do with the flowinfo
             #[cfg(feature = "proto-ipv6")]
-            IpAddress::Ipv6(addr) => SocketAddr::V6(SocketAddrV6::new(addr.0.into(), endpoint.port, 0, 0)), // TODO
+            IpAddress::Ipv6(addr) => SocketAddr::V6(SocketAddrV6::new(addr.0.into(), endpoint.port, 0, 0)),
         }
     }
 
