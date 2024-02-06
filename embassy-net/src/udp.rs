@@ -397,12 +397,7 @@ pub mod nal {
         for UdpSocket2<'d, N, TX_SZ, RX_SZ>
     {
         async fn receive_into(&mut self, buffer: &mut [u8]) -> Result<usize, Self::Error> {
-            loop {
-                let (len, remote) = UdpSocket::recv_from(&self.socket, buffer).await?;
-                if self.remote.unwrap() == remote {
-                    break Ok(len);
-                }
-            }
+            ConnectedUdpReceive::receive_into(&mut (&*self), buffer).await
         }
     }
 
@@ -410,7 +405,6 @@ pub mod nal {
         for &UdpSocket2<'d, N, TX_SZ, RX_SZ>
     {
         async fn receive_into(&mut self, buffer: &mut [u8]) -> Result<usize, Self::Error> {
-            // TODO: Avoid duplication
             loop {
                 let (len, remote) = UdpSocket::recv_from(&self.socket, buffer).await?;
                 if self.remote.unwrap() == remote {
@@ -422,13 +416,12 @@ pub mod nal {
 
     impl<'d, const N: usize, const TX_SZ: usize, const RX_SZ: usize> ConnectedUdpSend for UdpSocket2<'d, N, TX_SZ, RX_SZ> {
         async fn send(&mut self, data: &[u8]) -> Result<(), Self::Error> {
-            Ok(UdpSocket::send_to(&self.socket, data, self.remote.unwrap()).await?)
+            ConnectedUdpSend::send(&mut (&*self), data).await
         }
     }
 
     impl<'d, const N: usize, const TX_SZ: usize, const RX_SZ: usize> ConnectedUdpSend for &UdpSocket2<'d, N, TX_SZ, RX_SZ> {
         async fn send(&mut self, data: &[u8]) -> Result<(), Self::Error> {
-            // TODO: Avoid duplication
             Ok(UdpSocket::send_to(&self.socket, data, self.remote.unwrap()).await?)
         }
     }
@@ -449,14 +442,7 @@ pub mod nal {
         for UdpSocket2<'d, N, TX_SZ, RX_SZ>
     {
         async fn receive_into(&mut self, buffer: &mut [u8]) -> Result<(usize, SocketAddr, SocketAddr), Self::Error> {
-            let (len, remote) = UdpSocket::recv_from(&self.socket, buffer).await?;
-
-            let local = IpEndpoint {
-                addr: self.socket.endpoint().addr.unwrap(), // TODO
-                port: self.socket.endpoint().port,
-            };
-
-            Ok((len, to_nal_addr(&local), to_nal_addr(&remote)))
+            UnconnectedUdpReceive::receive_into(&mut &*self, buffer).await
         }
     }
 
@@ -464,7 +450,6 @@ pub mod nal {
         for &UdpSocket2<'d, N, TX_SZ, RX_SZ>
     {
         async fn receive_into(&mut self, buffer: &mut [u8]) -> Result<(usize, SocketAddr, SocketAddr), Self::Error> {
-            // TODO: Avoid duplication
             let (len, remote) = UdpSocket::recv_from(&self.socket, buffer).await?;
 
             let local = IpEndpoint {
@@ -485,8 +470,7 @@ pub mod nal {
             remote: SocketAddr,
             data: &[u8],
         ) -> Result<(), Self::Error> {
-            let remote = to_endpoint(&remote);
-            Ok(UdpSocket::send_to(&self.socket, data, remote).await?)
+            UnconnectedUdpSend::send(&mut &*self, _local, remote, data).await
         }
     }
 
@@ -499,7 +483,6 @@ pub mod nal {
             remote: SocketAddr,
             data: &[u8],
         ) -> Result<(), Self::Error> {
-            // TODO: Avoid duplication
             let remote = to_endpoint(&remote);
             Ok(UdpSocket::send_to(&self.socket, data, remote).await?)
         }
