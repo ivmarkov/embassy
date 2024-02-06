@@ -243,8 +243,8 @@ pub mod nal {
 
     use embedded_io_async::ErrorKind;
     use embedded_nal_async::{
-        ConnectedUdp, ConnectedUdpReceive, ConnectedUdpSend, ConnectedUdpSplit, IpAddr, SocketAddr, SocketAddrV4,
-        SocketAddrV6, UdpStack, UnconnectedUdp, UnconnectedUdpReceive, UnconnectedUdpSend, UnconnectedUdpSplit,
+        ConnectedUdpReceive, ConnectedUdpSend, ConnectedUdpSplit, IpAddr, SocketAddr, SocketAddrV4, SocketAddrV6,
+        UdpStack, UnconnectedUdpReceive, UnconnectedUdpSend, UnconnectedUdpSplit,
     };
     use smoltcp::wire::IpAddress;
 
@@ -448,8 +448,6 @@ pub mod nal {
         }
     }
 
-    impl<'d, const N: usize, const TX_SZ: usize, const RX_SZ: usize> ConnectedUdp for UdpSocket2<'d, N, TX_SZ, RX_SZ> {}
-
     impl<'d, const N: usize, const TX_SZ: usize, const RX_SZ: usize> ConnectedUdpSplit for UdpSocket2<'d, N, TX_SZ, RX_SZ> {
         type ConnectedReceive<'a> = &'a UdpSocket2<'d, N, TX_SZ, RX_SZ> where Self: 'a;
 
@@ -509,8 +507,6 @@ pub mod nal {
             Ok(UdpSocket::send_to(&self.socket, data, remote).await?)
         }
     }
-
-    impl<'d, const N: usize, const TX_SZ: usize, const RX_SZ: usize> UnconnectedUdp for UdpSocket2<'d, N, TX_SZ, RX_SZ> {}
 
     impl<'d, const N: usize, const TX_SZ: usize, const RX_SZ: usize> UnconnectedUdpSplit
         for UdpSocket2<'d, N, TX_SZ, RX_SZ>
