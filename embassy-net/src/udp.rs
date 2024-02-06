@@ -316,27 +316,49 @@ pub mod nal {
             local: SocketAddr,
             remote: SocketAddr,
         ) -> Result<(SocketAddr, Self::Connected<'_>), Self::Error> {
-            let mut socket = UdpSocket2::new(self.stack, Some(to_endpoint(&remote)), self.state)?;
+            let remote = to_endpoint(&remote);
 
-            socket.socket.bind(to_listen_endpoint(&local))?;
+            let mut local = to_endpoint(&local);
+            if local.addr.is_unspecified() {
+                // As per the `connect_from` contract, the local address must be fixed by the network stack at connection time
+                local.addr = self
+                    .stack
+                    .socket
+                    .borrow_mut()
+                    .iface
+                    .get_source_address(&remote.addr)
+                    .unwrap(); // TODO
+            }
+
+            let mut socket = UdpSocket2::new(self.stack, Some(remote), self.state)?;
+
+            socket.socket.bind(local)?;
 
             Ok((to_nal_addr_listen(&socket.socket.endpoint()), socket))
         }
 
         async fn bind_single(&self, local: SocketAddr) -> Result<(SocketAddr, Self::UniquelyBound<'_>), Self::Error> {
+            let mut local = to_endpoint(&local);
+            if local.addr.is_unspecified() {
+                // As per the `bind_single` contract, the local address must be fixed by the network stack at connection time
+                local.addr = self
+                    .stack
+                    .socket
+                    .borrow_mut()
+                    .iface
+                    .get_source_address(&local.addr)
+                    .unwrap(); // TODO
+            }
+
             let mut socket = UdpSocket2::new(self.stack, None, self.state)?;
 
-            socket.socket.bind(to_listen_endpoint(&local))?;
+            socket.socket.bind(local)?;
 
             Ok((to_nal_addr_listen(&socket.socket.endpoint()), socket))
         }
 
-        async fn bind_multiple(&self, local: SocketAddr) -> Result<Self::MultiplyBound<'_>, Self::Error> {
-            let mut socket = UdpSocket2::new(self.stack, None, self.state)?;
-
-            socket.socket.bind(to_listen_endpoint(&local))?;
-
-            Ok(socket)
+        async fn bind_multiple(&self, _local: SocketAddr) -> Result<Self::MultiplyBound<'_>, Self::Error> {
+            todo!("Not really possible. Or at least not easily possible.");
         }
     }
 
@@ -565,17 +587,6 @@ pub mod nal {
                 IpAddr::V6(addr) => crate::IpAddress::Ipv6(crate::Ipv6Address::from_bytes(&addr.octets())),
                 #[cfg(not(feature = "proto-ipv6"))]
                 IpAddr::V6(_) => panic!("ipv6 support not enabled"),
-            },
-            port: addr.port(),
-        }
-    }
-
-    fn to_listen_endpoint(addr: &SocketAddr) -> IpListenEndpoint {
-        IpListenEndpoint {
-            addr: if addr.ip().is_unspecified() {
-                None
-            } else {
-                Some(to_endpoint(addr).addr)
             },
             port: addr.port(),
         }
