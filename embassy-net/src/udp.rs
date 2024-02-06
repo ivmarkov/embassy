@@ -318,25 +318,25 @@ pub mod nal {
         ) -> Result<(SocketAddr, Self::Connected<'_>), Self::Error> {
             let mut socket = UdpSocket2::new(self.stack, Some(to_endpoint(&remote)), self.state)?;
 
-            socket.socket.bind(to_endpoint(&local))?;
+            socket.socket.bind(to_listen_endpoint(&local))?;
 
-            Ok((local, socket)) // TODO
+            Ok((to_nal_addr_listen(&socket.socket.endpoint()), socket))
         }
 
         async fn bind_single(&self, local: SocketAddr) -> Result<(SocketAddr, Self::UniquelyBound<'_>), Self::Error> {
             let mut socket = UdpSocket2::new(self.stack, None, self.state)?;
 
-            socket.socket.bind(to_endpoint(&local))?;
+            socket.socket.bind(to_listen_endpoint(&local))?;
 
-            Ok((local, socket)) // TODO
+            Ok((to_nal_addr_listen(&socket.socket.endpoint()), socket))
         }
 
         async fn bind_multiple(&self, local: SocketAddr) -> Result<Self::MultiplyBound<'_>, Self::Error> {
             let mut socket = UdpSocket2::new(self.stack, None, self.state)?;
 
-            socket.socket.bind(to_endpoint(&local))?;
+            socket.socket.bind(to_listen_endpoint(&local))?;
 
-            Ok(socket) // TODO
+            Ok(socket)
         }
     }
 
@@ -587,6 +587,17 @@ pub mod nal {
         }
     }
 
+    fn to_listen_endpoint(addr: &SocketAddr) -> IpListenEndpoint {
+        IpListenEndpoint {
+            addr: if addr.ip().is_unspecified() {
+                None
+            } else {
+                Some(to_endpoint(addr).addr)
+            },
+            port: addr.port(),
+        }
+    }
+
     fn to_nal_addr(endpoint: &IpEndpoint) -> SocketAddr {
         match endpoint.addr {
             #[cfg(feature = "proto-ipv4")]
@@ -594,5 +605,19 @@ pub mod nal {
             #[cfg(feature = "proto-ipv6")]
             IpAddress::Ipv6(addr) => SocketAddr::V6(SocketAddrV6::new(addr.0.into(), endpoint.port, 0, 0)), // TODO
         }
+    }
+
+    fn to_nal_addr_listen(endpoint: &IpListenEndpoint) -> SocketAddr {
+        to_nal_addr(&IpEndpoint {
+            addr: endpoint.addr.unwrap_or_else(|| {
+                #[cfg(feature = "proto-ipv6")]
+                return crate::IpAddress::Ipv6(crate::Ipv6Address::UNSPECIFIED);
+                #[cfg(all(not(feature = "proto-ipv6"), feature = "proto-ipv4"))]
+                return crate::IpAddress::Ipv4(crate::Ipv4Address::UNSPECIFIED);
+                #[cfg(not(any(feature = "proto-ipv6", feature = "proto-ipv4")))]
+                panic!("Neither ipv4 not ipv6 support is enabled");
+            }),
+            port: endpoint.port,
+        })
     }
 }
