@@ -449,11 +449,11 @@ pub mod nal {
     }
 
     impl<'d, const N: usize, const TX_SZ: usize, const RX_SZ: usize> ConnectedUdpSplit for UdpSocket2<'d, N, TX_SZ, RX_SZ> {
-        type ConnectedReceive<'a> = &'a UdpSocket2<'d, N, TX_SZ, RX_SZ> where Self: 'a;
+        type Receive<'a> = &'a UdpSocket2<'d, N, TX_SZ, RX_SZ> where Self: 'a;
 
-        type ConnectedSend<'a> = &'a UdpSocket2<'d, N, TX_SZ, RX_SZ> where Self: 'a;
+        type Send<'a> = &'a UdpSocket2<'d, N, TX_SZ, RX_SZ> where Self: 'a;
 
-        async fn split(&mut self) -> Result<(Self::ConnectedReceive<'_>, Self::ConnectedSend<'_>), Self::Error> {
+        async fn split(&mut self) -> Result<(Self::Receive<'_>, Self::Send<'_>), Self::Error> {
             Ok((&*self, &*self))
         }
     }
@@ -511,11 +511,11 @@ pub mod nal {
     impl<'d, const N: usize, const TX_SZ: usize, const RX_SZ: usize> UnconnectedUdpSplit
         for UdpSocket2<'d, N, TX_SZ, RX_SZ>
     {
-        type UnconnectedReceive<'a> = &'a UdpSocket2<'d, N, TX_SZ, RX_SZ> where Self: 'a;
+        type Receive<'a> = &'a UdpSocket2<'d, N, TX_SZ, RX_SZ> where Self: 'a;
 
-        type UnconnectedSend<'a> = &'a UdpSocket2<'d, N, TX_SZ, RX_SZ> where Self: 'a;
+        type Send<'a> = &'a UdpSocket2<'d, N, TX_SZ, RX_SZ> where Self: 'a;
 
-        async fn split(&mut self) -> Result<(Self::UnconnectedReceive<'_>, Self::UnconnectedSend<'_>), Self::Error> {
+        async fn split(&mut self) -> Result<(Self::Receive<'_>, Self::Send<'_>), Self::Error> {
             Ok((&*self, &*self))
         }
     }
